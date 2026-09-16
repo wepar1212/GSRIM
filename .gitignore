@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+results/
+dist/
+build/*/
+.workbuddy/
+research/
+.env
+.env.*
+*.pem
+*.key
+*.log
+# External datasets and exploratory download scripts are not redistributed.
+data/*
+!data/README.md

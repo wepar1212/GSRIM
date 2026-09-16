@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GSRIM · 设置 / 结果</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body data-view="setup">
+<header class="topbar">
+  <div class="brand">
+    <span class="gs">G</span><span class="srim">SRIM</span>
+    <small>GPU ION TRANSPORT</small>
+  </div>
+  <div class="top-right">
+    <nav class="view-tabs" aria-label="页面切换">
+      <button type="button" id="tab-setup" class="tab active">1 设置 Setup</button>
+      <button type="button" id="tab-results" class="tab">2 结果 Results</button>
+    </nav>
+    <span class="badge">CUDA · FP64 · ZBL + Se(E) · R2</span>
+    <span id="connection" class="conn">正在连接…</span>
+  </div>
+</header>
+
+<div class="warning" role="note">
+  研究开发版 · 非 SRIM 等价实现 · 非晶静态靶。结果未经实验验证，不能直接作为工艺参数。
+</div>
+
+<div id="message" role="alert"></div>
+
+<!-- ======================== PAGE 1: SETUP ======================== -->
+<main id="view-setup" class="page view-setup">
+  <div class="page-head">
+    <div>
+      <h1>计算设置 · TRIM Setup</h1>
+      <p class="page-sub">填写注入离子与靶层参数，然后点击「开始计算」进入结果页。</p>
+    </div>
+    <div class="filebar">
+      <button id="save-project" type="button">保存项目</button>
+      <button id="load-project" type="button">打开项目</button>
+      <button id="restore" type="button">恢复断点</button>
+      <input type="file" id="project-file" accept=".json" hidden>
+    </div>
+  </div>
+
+  <fieldset id="inputs" class="setup-grid">
+    <section class="box ion-box">
+      <div class="box-title">ION DATA · 注入离子</div>
+      <div class="ion-row">
+        <div class="ion-chip" id="ion-chip" aria-live="polite">
+          <div class="chip-z">Z = <b id="chip-z">2</b></div>
+          <div class="chip-sym" id="chip-sym">He</div>
+          <div class="chip-name" id="chip-name">Helium</div>
+          <div class="chip-mass">Mass = <span id="chip-mass">4.0026</span> u</div>
+        </div>
+        <div class="ion-fields">
+          <label>元素种类 Symbol
+            <input id="ion-symbol" list="element-list" autocomplete="off" spellcheck="false" maxlength="3">
+          </label>
+          <label>能量 Energy / keV
+            <input id="ion-energy" type="number" step="any">
+          </label>
+          <label>入射角 Angle / °（相对法线）
+            <input id="ion-angle" type="number" step="any">
+          </label>
+          <label>质量 Mass / u
+            <input id="ion-mass" type="number" step="any">
+          </label>
+          <label>原子序数 Z
+            <input id="ion-z" type="number" min="1" max="118" step="1">
+          </label>
+        </div>
+      </div>
+      <p class="hint">输入元素符号后自动填 Z 与质量。能量是每个离子的总动能（keV），0° = 垂直入射。</p>
+    </section>
+
+    <section class="box target-box">
+      <div class="box-title row-title">
+        <span>TARGET DATA · 靶层</span>
+        <button id="add-layer" type="button" class="mini">＋ 新层 Add Layer</button>
+      </div>
+      <table class="grid-table" id="layer-table">
+        <thead>
+          <tr>
+            <th></th>
+            <th>层名 Layer</th>
+            <th>宽度 Width Å</th>
+            <th>密度 Density g/cm³</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="layers-body"></tbody>
+      </table>
+      <p class="hint">点左侧单选切换当前层；在下方编辑该层的元素与配比。</p>
+    </section>
+
+    <section class="box species-box">
+      <div class="box-title row-title">
+        <span>INPUT ELEMENTS TO LAYER <em id="selected-layer-label">Layer 1</em></span>
+      </div>
+      <div class="compound-row">
+        <label class="grow">Compound Dictionary
+          <select id="compound-select">
+            <option value="">— 选择化合物填入当前层 —</option>
+          </select>
+        </label>
+        <button id="apply-compound" type="button" class="mini">填入</button>
+      </div>
+      <div class="table-scroll">
+        <table class="grid-table dense" id="species-table">
+          <thead>
+            <tr>
+              <th>符号 Symbol</th>
+              <th>名称 Name</th>
+              <th>Z</th>
+              <th>Weight / u</th>
+              <th>Amount 配比</th>
+              <th>Disp eV</th>
+              <th>Lat eV</th>
+              <th>Surf eV</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="species-body"></tbody>
+        </table>
+      </div>
+      <div class="row">
+        <button id="add-species" type="button" class="mini">＋ 添加元素 Add element</button>
+      </div>
+      <p class="hint">Amount 为原子配比（如 SiO₂：Si=1，O=2）。用下拉框换元素会自动填 Z/质量/结合能。</p>
+    </section>
+
+    <section class="box advanced-box">
+      <details class="advanced">
+        <summary>高级参数 Advanced / Run（离子数、种子、损伤模型等）</summary>
+        <div class="grid2">
+          <label>计算名称 Calculation name
+            <input id="name" maxlength="200">
+          </label>
+          <label>随机种子 Seed<input id="seed" type="number"></label>
+        </div>
+        <div class="grid2">
+          <label>批次 Batch size<input id="batch" type="number"></label>
+          <label>深度分箱 Bins<input id="bins" type="number"></label>
+        </div>
+        <div class="grid2">
+          <label>深度分箱 Bins<input id="bins" type="number"></label>
+          <label>截止能量 Cutoff eV<input id="cutoff" type="number" step="any"></label>
+        </div>
+        <div class="grid2">
+          <label>事件上限 Max events<input id="events" type="number"></label>
+          <label>碰撞半径系数 Impact scale<input id="impact" type="number" step="any"></label>
+        </div>
+        <p class="hint">若结果页提示 event/stack limits：把「事件上限」调到 200000–500000，或改用「仅离子」模式、降低能量。反冲栈深度已为 128。</p>
+        <div class="grid2">
+          <label>损伤模型 Damage
+            <select id="damage">
+              <option value="creation">Creation（位移产生）</option>
+              <option value="kinchin-pease" disabled>Kinchin–Pease（待验证，已停用）</option>
+            </select>
+          </label>
+          <label>离子数建议
+            <span class="static-line">日常预览 1e3–1e4；正式统计 ≥1e5</span>
+          </label>
+        </div>
+        <div class="radio-row">
+          <label><input type="radio" name="mode" value="cascades" id="mode-cascades"> 级联 Cascades（跟踪次级）</label>
+          <label><input type="radio" name="mode" value="ions" id="mode-ions"> 仅离子 Ions（反冲局域沉积，更快）</label>
+        </div>
+        <div class="radio-row">
+          <label><input type="radio" name="scattering" value="table" id="scat-table"> 散射查表 Table（GPU，默认）</label>
+          <label><input type="radio" name="scattering" value="quadrature" id="scat-quad"> 数值积分 Quadrature（校验）</label>
+        </div>
+        <label>电子阻止 Electronic stopping
+          <select id="stopping">
+            <option value="iaea">IAEA 实验表 + 低能 BV 兜底（推荐）</option>
+            <option value="biersack-varelas">Biersack–Varelas 解析</option>
+            <option value="lindhard-scharff">Lindhard–Scharff（旧）</option>
+          </select>
+        </label>
+        <p class="hint">阻止本领默认走 IAEA v2026-01 数据；表外能量用 BV 补齐。散射：ZBL。无晶体沟道、退火、成分演变。</p>
+      </details>
+    </section>
+  </fieldset>
+
+  <div class="launch-bar">
+    <div class="launch-fields">
+      <label class="launch-ions">注入离子数 Total ions
+        <input id="ions" type="number" min="1" max="1000000" step="1">
+      </label>
+      <div class="launch-note">预览可用 1000–10000；正式统计建议 ≥100000。离子种类 / 能量 / 入射角 / 层宽 / 密度 / 元素在上方填写。</div>
+    </div>
+    <button id="start" type="button" class="primary launch">▶ 开始计算 Start GPU Run</button>
+  </div>
+</main>
+
+<!-- ======================== PAGE 2: RESULTS ======================== -->
+<main id="view-results" class="page view-results hidden">
+  <div class="page-head">
+    <div>
+      <h1>模拟结果 · SRIM-style Results</h1>
+      <p class="page-sub">独立 GPU BCA 输出。统计与图不等于原版 SRIM。</p>
+    </div>
+    <div class="actions results-actions">
+      <button id="back-setup" type="button">← 返回设置</button>
+      <button id="pause" type="button" disabled>暂停</button>
+      <button id="resume" type="button" disabled>继续</button>
+      <button id="cancel" type="button" disabled>停止</button>
+    </div>
+  </div>
+
+  <div class="status-bar">
+    <div class="status-left">
+      <span id="status" class="status-pill">等待计算</span>
+      <span id="progress-text">尚未开始</span>
+    </div>
+    <div class="status-right">
+      <span>Elapsed <b id="elapsed">0.0</b> s</span>
+      <span>Ions <b id="ions-done">0</b> / <b id="ions-total">0</b></span>
+    </div>
+    <progress id="progress" max="1" value="0"></progress>
+  </div>
+
+  <div class="result-top">
+    <div class="panel target-summary">
+      <h3>TARGET DATA</h3>
+      <table class="grid-table dense" id="target-summary-table">
+        <thead>
+          <tr><th>Layer</th><th>Width Å</th><th>Density</th><th>Elements</th></tr>
+        </thead>
+        <tbody id="target-summary-body"></tbody>
+      </table>
+      <div class="tiny" id="ion-summary">—</div>
+    </div>
+
+    <div class="panel ion-stats">
+      <h3>ION DATA / STATS</h3>
+      <table class="kv">
+        <tr><td>Backscattered Ions</td><td class="num" id="stat-back">—</td></tr>
+        <tr><td>Transmitted Ions</td><td class="num" id="stat-trans">—</td></tr>
+        <tr><td>Implanted / Stopped</td><td class="num" id="stat-implant">—</td></tr>
+        <tr><td>Vacancies/Ion</td><td class="num" id="stat-vac">—</td></tr>
+      </table>
+      <div class="subhead">ION RANGES (Å · nm)</div>
+      <table class="grid-table dense">
+        <thead>
+          <tr><th></th><th>Mean</th><th>Straggle</th><th>Mean nm</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Longitudinal</td><td class="num" id="range-mean">—</td><td class="num" id="range-str">—</td><td class="num" id="range-nm">—</td></tr>
+          <tr><td>Lateral Proj</td><td class="num" id="lat-mean">—</td><td class="num" id="lat-str">—</td><td class="num" id="lat-nm">—</td></tr>
+          <tr><td>Radial</td><td class="num" id="rad-mean">—</td><td class="num" id="rad-str">—</td><td class="num" id="rad-nm">—</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="panel energy-loss">
+      <h3>% ENERGY LOSS</h3>
+      <table class="grid-table dense">
+        <thead>
+          <tr><th></th><th>Ions</th><th>Recoils</th><th>Total</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Ionization</td><td class="num" id="el-ion-ions">—</td><td class="num" id="el-ion-rec">—</td><td class="num" id="el-ion-tot">—</td></tr>
+          <tr><td>Phonons</td><td class="num" id="el-phon-ions">—</td><td class="num" id="el-phon-rec">—</td><td class="num" id="el-phon-tot">—</td></tr>
+          <tr><td>Nuclear→Recoils</td><td class="num" id="el-nuc-ions">—</td><td class="num">—</td><td class="num" id="el-nuc-tot">—</td></tr>
+        </tbody>
+      </table>
+      <table class="kv">
+        <tr><td>Escaped energy</td><td class="num" id="el-escaped">—</td></tr>
+        <tr><td>Ionization eV/ion</td><td class="num" id="el-ion-ev">—</td></tr>
+        <tr><td>Phonon eV/ion</td><td class="num" id="el-phon-ev">—</td></tr>
+      </table>
+    </div>
+  </div>
+
+  <div class="result-mid">
+    <div class="panel sputter-box">
+      <h3>SPUTTERING YIELD</h3>
+      <div class="sputter-total">
+        <span>前表面溅射</span>
+        <strong id="sputter-total">—</strong>
+        <span>atoms / ion</span>
+      </div>
+      <table class="grid-table dense">
+        <thead><tr><th>Element</th><th>atoms/ion</th><th>eV/atom</th></tr></thead>
+        <tbody id="sputter-body"><tr><td colspan="3" class="muted">—</td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="panel plot-area">
+      <div class="plot-side">
+        <div class="side-title">DISTRIBUTIONS</div>
+        <div id="plot-list" class="plot-list" role="listbox" aria-label="分布图选择"></div>
+      </div>
+      <div class="plot-main">
+        <div class="plot-bar">
+          <span id="plot-caption">尚无结果</span>
+          <button id="save-plot" type="button" class="mini">保存 PNG</button>
+        </div>
+        <canvas id="plot" width="860" height="420" aria-label="模拟结果图"></canvas>
+        <div id="legend" class="legend"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="result-bottom">
+    <div class="panel">
+      <h3>Warnings / 说明</h3>
+      <ul id="warnings" class="warn-list">
+        <li>所有统计来自独立 GPU 内核，不是调用 TRIM。</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>浓度与剂量换算 · Dose</h3>
+      <label>目标新增峰值浓度 / cm⁻³
+        <input id="desired" type="number" value="1e18" step="any">
+      </label>
+      <div id="dose" class="dose">等待注入分布</div>
+      <p class="hint">剂量 = 目标浓度 ÷ 归一化分布峰值。仅表示植入原子新增浓度。</p>
+    </div>
+    <div class="panel">
+      <h3>Export</h3>
+      <div class="exportbar">
+        <button id="csv" type="button" disabled>深度分布 CSV</button>
+        <button id="json" type="button" disabled>完整结果 JSON</button>
+      </div>
+      <div id="summary" class="summary"></div>
+      <p class="hint" id="checkpoint-path">R2 默认断点：results/revision-2/autosave.npz。旧版结果只读，不与新内核混算。</p>
+    </div>
+  </div>
+</main>
+
+<footer>
+  GSRIM / Independent GPU BCA
+  <span>本地运行 · 无云端计算 · 原版 SRIM 只作参考</span>
+</footer>
+
+<datalist id="element-list"></datalist>
+<script src="/app.js"></script>
+</body>
+</html>
