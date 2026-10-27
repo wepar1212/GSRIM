@@ -28,6 +28,8 @@ class PortableTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder, patch.dict(os.environ, {}, clear=True):
             with patch('sys.executable', str(Path(folder) / 'GSRIM.exe')):
                 result = configure_storage()
-            self.assertEqual(result, Path(folder) / 'results')
+            # Windows runners may return an 8.3 alias from tempfile, while
+            # configure_storage deliberately resolves the executable's path.
+            self.assertEqual(result, Path(folder).resolve() / 'results')
             self.assertEqual(Path(os.environ['GSRIM_RESULTS_DIR']), result / 'revision-4')
             self.assertEqual(_cache_path(4, 4, (1, 2), (1, 2), 8).parent, result / 'tables')
