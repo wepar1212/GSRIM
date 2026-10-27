@@ -5,8 +5,9 @@ Reduced variables (ZBL):
   rho = b / a                    dimensionless impact parameter
   theta = theta(eps, rho)        COM scattering angle (rad)
 
-The table stores theta on a log-log grid. Transport interpolates bilinearly
-in (log eps, log rho). Full quadrature remains available for verification.
+The table stores theta on a log-log grid. Transport uses Catmull-Rom cubic
+interpolation; the CPU helper is bilinear. Outside the grid, transport uses
+direct quadrature rather than clamping an unrelated boundary value.
 """
 from functools import lru_cache
 import numpy as np
@@ -18,6 +19,7 @@ EPS_NODES = 512
 RHO_NODES = 512
 EPS_MIN, EPS_MAX = 1e-4, 1e8
 RHO_MIN, RHO_MAX = 1e-6, 64.0
+TABLE_REVISION = 2
 
 
 def _theta_quadrature(eps, rho, order=64):
@@ -27,7 +29,8 @@ def _theta_quadrature(eps, rho, order=64):
     # Turning point of 1 - rho^2/rb^2 - phi(rb)/(eps*rb) = 0
     lo = np.zeros_like(eps)
     # Coulomb-like upper bracket in reduced units: rb_hi ~ (1 + sqrt(1+4 eps rho^2))/(2 eps)
-    hi = 0.5 * (1.0 / eps + np.sqrt(1.0 / eps**2 + 4.0 * rho**2))
+    c=float(phi(0.0))/eps
+    hi = 0.5 * (c + np.sqrt(c*c + 4.0 * rho**2))
     for _ in range(56):
         mid = 0.5 * (lo + hi)
         allowed = 1.0 - (rho / mid) ** 2 - phi(mid) / (eps * mid) > 0.0
@@ -56,8 +59,7 @@ def build_universal_table(eps_nodes=EPS_NODES, rho_nodes=RHO_NODES,
     eps = np.exp(le).ravel()
     rho = np.exp(lr).ravel()
     theta = _theta_quadrature(eps, rho, order=quad_order).reshape(eps_nodes, rho_nodes)
-    # Head-on column is exactly pi for every eps.
-    theta[:, 0] = np.pi
+    # rho_min is positive: even the first column is not a head-on collision.
     return {
         "log_eps": log_eps,
         "log_rho": log_rho,
@@ -70,8 +72,10 @@ def build_universal_table(eps_nodes=EPS_NODES, rho_nodes=RHO_NODES,
 
 def _cache_path(eps_nodes, rho_nodes, eps_range, rho_range, quad_order):
     from pathlib import Path
-    root = Path(__file__).resolve().parents[1] / "results" / "tables"
-    name = f"zbl_theta_{eps_nodes}x{rho_nodes}_q{quad_order}.npz"
+    import os
+    default = Path(__file__).resolve().parents[1] / "results" / "tables"
+    root = Path(os.environ.get("GSRIM_TABLE_CACHE_DIR", str(default)))
+    name = f"zbl_theta_v{TABLE_REVISION}_{eps_nodes}x{rho_nodes}_q{quad_order}.npz"
     return root / name
 
 
@@ -113,13 +117,21 @@ def load_cached_or_build(eps_nodes=EPS_NODES, rho_nodes=RHO_NODES,
 
 @lru_cache(maxsize=4)
 def load_or_build(cache_key=(EPS_NODES, RHO_NODES, EPS_MIN, EPS_MAX, RHO_MIN, RHO_MAX)):
-    return build_universal_table()
+    ne,nr,emin,emax,rmin,rmax=cache_key
+    return build_universal_table(ne,nr,(emin,emax),(rmin,rmax))
 
 
 def interpolate(theta, log_eps_grid, log_rho_grid, eps, rho):
     """Bilinear interpolation of theta on the log-log grid (CPU reference)."""
-    le = np.log(np.clip(eps, EPS_MIN, EPS_MAX))
-    lr = np.log(np.clip(rho, RHO_MIN, RHO_MAX))
+    eps,rho=np.broadcast_arrays(np.asarray(eps,dtype=float),np.asarray(rho,dtype=float))
+    if (not np.all(np.isfinite(eps)) or not np.all(np.isfinite(rho))
+        or np.any(eps<np.exp(log_eps_grid[0])*(1-1e-14))
+        or np.any(eps>np.exp(log_eps_grid[-1])*(1+1e-14)) or np.any(rho<0)
+        or np.any((rho>0)&(rho<np.exp(log_rho_grid[0])*(1-1e-14)))
+        or np.any(rho>np.exp(log_rho_grid[-1])*(1+1e-14))):
+        raise ValueError('Outside the scattering table; use direct quadrature')
+    le = np.log(eps)
+    lr = np.log(np.maximum(rho,np.exp(log_rho_grid[0])))
     # cell indices
     di = (log_eps_grid[1] - log_eps_grid[0])
     dj = (log_rho_grid[1] - log_rho_grid[0])
@@ -133,8 +145,9 @@ def interpolate(theta, log_eps_grid, log_rho_grid, eps, rho):
     t01 = theta[i0, j0 + 1]
     t10 = theta[i0 + 1, j0]
     t11 = theta[i0 + 1, j0 + 1]
-    return ((1 - ti) * (1 - tj) * t00 + (1 - ti) * tj * t01
+    value=((1 - ti) * (1 - tj) * t00 + (1 - ti) * tj * t01
             + ti * (1 - tj) * t10 + ti * tj * t11)
+    return np.where(rho==0,np.pi,value)
 
 
 def lab_transfer(energy_ev, angle, m1, m2):

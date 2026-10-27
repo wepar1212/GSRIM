@@ -2,13 +2,13 @@
 import copy
 import math
 from .materials import Species, Layer, Target
+from .compounds import species_from_element
 
 DEFAULT = {
     "schema": 1, "name": "He in Si — development example",
     "ion": {"symbol": "He", "z": 2, "mass_u": 4.0026, "energy_kev": 5, "angle_deg": 0},
     "layers": [{"name": "Layer1", "thickness_a": 2000, "density_g_cm3": 2.329,
-        "species": [{"symbol": "Si", "z": 14, "mass_u": 28.085, "amount": 1,
-                     "displacement_ev": 25, "lattice_ev": 3, "surface_ev": 4.7}]}],
+        "species": [species_from_element("Si")]}],
     "run": {"ions": 256, "seed": 12345, "batch_size": 4096, "bins": 160,
             "cutoff_ev": 3, "max_events": 100000, "mode": "cascades", "impact_scale": 1.0,
             "damage": "creation"},
@@ -40,6 +40,9 @@ def validate(project):
             raise ValueError("Use 1..8 species per layer")
         items=[]
         for s in layer["species"]:
+            for key in ("displacement_ev", "lattice_ev", "surface_ev"):
+                if s.get(key) is None or s.get(key) == "":
+                    raise ValueError(f"{s.get('symbol', '?')}: {key} is unavailable; enter a material-specific value")
             item=Species(**{key:s[key] for key in ("symbol","z","mass_u","displacement_ev","lattice_ev","surface_ev")})
             if item.lattice_ev >= item.displacement_ev:
                 raise ValueError("Lattice binding energy must be less than displacement threshold")

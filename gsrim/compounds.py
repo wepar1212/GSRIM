@@ -1,49 +1,22 @@
 """Element weights and common compound targets for the setup UI.
 
-Densities and binding energies are literature-style engineering estimates for
-research setup convenience. They are not a proprietary SRIM material database
-and must be checked before publication-grade use.
+Individual elements use the audited, source-labelled suggestions in
+ element_defaults.py. Compound-specific presets retain their explicit values;
+these are setup assumptions and require material-specific verification.
 """
-ELEMENTS = {
-    "H": {"z": 1, "mass_u": 1.008}, "He": {"z": 2, "mass_u": 4.0026},
-    "Li": {"z": 3, "mass_u": 6.941}, "Be": {"z": 4, "mass_u": 9.0122},
-    "B": {"z": 5, "mass_u": 10.81}, "C": {"z": 6, "mass_u": 12.011},
-    "N": {"z": 7, "mass_u": 14.007}, "O": {"z": 8, "mass_u": 15.999},
-    "F": {"z": 9, "mass_u": 18.998}, "Ne": {"z": 10, "mass_u": 20.180},
-    "Na": {"z": 11, "mass_u": 22.990}, "Mg": {"z": 12, "mass_u": 24.305},
-    "Al": {"z": 13, "mass_u": 26.982}, "Si": {"z": 14, "mass_u": 28.085},
-    "P": {"z": 15, "mass_u": 30.974}, "S": {"z": 16, "mass_u": 32.065},
-    "Cl": {"z": 17, "mass_u": 35.453}, "Ar": {"z": 18, "mass_u": 39.948},
-    "K": {"z": 19, "mass_u": 39.098}, "Ca": {"z": 20, "mass_u": 40.078},
-    "Sc": {"z": 21, "mass_u": 44.956}, "Ti": {"z": 22, "mass_u": 47.867},
-    "V": {"z": 23, "mass_u": 50.942}, "Cr": {"z": 24, "mass_u": 51.996},
-    "Mn": {"z": 25, "mass_u": 54.938}, "Fe": {"z": 26, "mass_u": 55.845},
-    "Co": {"z": 27, "mass_u": 58.933}, "Ni": {"z": 28, "mass_u": 58.693},
-    "Cu": {"z": 29, "mass_u": 63.546}, "Zn": {"z": 30, "mass_u": 65.38},
-    "Ga": {"z": 31, "mass_u": 69.723}, "Ge": {"z": 32, "mass_u": 72.64},
-    "As": {"z": 33, "mass_u": 74.922}, "Se": {"z": 34, "mass_u": 78.96},
-    "Br": {"z": 35, "mass_u": 79.904}, "Kr": {"z": 36, "mass_u": 83.798},
-    "Rb": {"z": 37, "mass_u": 85.468}, "Sr": {"z": 38, "mass_u": 87.62},
-    "Y": {"z": 39, "mass_u": 88.906}, "Zr": {"z": 40, "mass_u": 91.224},
-    "Nb": {"z": 41, "mass_u": 92.906}, "Mo": {"z": 42, "mass_u": 95.96},
-    "Tc": {"z": 43, "mass_u": 98.0}, "Ru": {"z": 44, "mass_u": 101.07},
-    "Rh": {"z": 45, "mass_u": 102.906}, "Pd": {"z": 46, "mass_u": 106.42},
-    "Ag": {"z": 47, "mass_u": 107.868}, "Cd": {"z": 48, "mass_u": 112.411},
-    "In": {"z": 49, "mass_u": 114.818}, "Sn": {"z": 50, "mass_u": 118.71},
-    "Sb": {"z": 51, "mass_u": 121.76}, "Te": {"z": 52, "mass_u": 127.60},
-    "I": {"z": 53, "mass_u": 126.904}, "Xe": {"z": 54, "mass_u": 131.29},
-    "Cs": {"z": 55, "mass_u": 132.905}, "Ba": {"z": 56, "mass_u": 137.327},
-    "La": {"z": 57, "mass_u": 138.905}, "Ce": {"z": 58, "mass_u": 140.116},
-    "Hf": {"z": 72, "mass_u": 178.49}, "Ta": {"z": 73, "mass_u": 180.948},
-    "W": {"z": 74, "mass_u": 183.84}, "Re": {"z": 75, "mass_u": 186.207},
-    "Os": {"z": 76, "mass_u": 190.23}, "Ir": {"z": 77, "mass_u": 192.217},
-    "Pt": {"z": 78, "mass_u": 195.084}, "Au": {"z": 79, "mass_u": 196.967},
-    "Hg": {"z": 80, "mass_u": 200.59}, "Pb": {"z": 82, "mass_u": 207.2},
-    "Bi": {"z": 83, "mass_u": 208.980}, "U": {"z": 92, "mass_u": 238.029},
-}
+from .element_defaults import ELEMENT_RECORDS, binding_defaults
+
+ELEMENTS = {symbol: {"z": record["z"], "mass_u": record["mass_u"]}
+            for symbol, record in ELEMENT_RECORDS.items()}
 
 LAYER_KEYS = ("name", "thickness_a", "density_g_cm3", "species")
 LAYER_SPECIES_KEYS = ("symbol", "z", "mass_u", "amount", "displacement_ev", "lattice_ev", "surface_ev")
+
+
+def species_from_element(symbol, amount=1.0):
+    """Build an editable row; unknown energy suggestions remain None."""
+    element = ELEMENTS[symbol]
+    return {"symbol": symbol, **element, "amount": float(amount), **binding_defaults(symbol)}
 
 
 def _sp(symbol, amount, disp, lat, surf):
@@ -77,6 +50,13 @@ COMPOUNDS = {
         _sp("Fe", 1, 40, 3.0, 4.3), _sp("Cr", 0.18, 40, 3.0, 4.1),
         _sp("Ni", 0.10, 40, 3.0, 4.4), _sp("Mn", 0.02, 40, 3.0, 2.9)]},
 }
+
+# Single-element dictionary entries must agree with adding that element.
+# Explicit compound presets are not replaced by pure-element suggestions.
+for _name, _compound in COMPOUNDS.items():
+    if _name in ELEMENTS and len(_compound["species"]) == 1:
+        _compound["species"] = [species_from_element(_name)]
+
 
 _ALIASES = {
     "water": "H2O", "h2o": "H2O",
@@ -143,15 +123,20 @@ def layer_from_elements(species_list, thickness_a, density_g_cm3, name="Custom")
         if sym in seen:
             raise ValueError("repeated species in one layer")
         seen.add(sym)
+        defaults = binding_defaults(sym)
         entry = {
             "symbol": sym,
             "z": int(item.get("z", ELEMENTS[sym]["z"])),
             "mass_u": float(item.get("mass_u", ELEMENTS[sym]["mass_u"])),
             "amount": float(item["amount"]),
-            "displacement_ev": float(item.get("displacement_ev", 25.0)),
-            "lattice_ev": float(item.get("lattice_ev", 3.0)),
-            "surface_ev": float(item.get("surface_ev", 2.0)),
+            "displacement_ev": item.get("displacement_ev", defaults["displacement_ev"]),
+            "lattice_ev": item.get("lattice_ev", defaults["lattice_ev"]),
+            "surface_ev": item.get("surface_ev", defaults["surface_ev"]),
         }
+        for key in ("displacement_ev", "lattice_ev", "surface_ev"):
+            if entry[key] is None:
+                raise ValueError(f"{sym}: {key} is unavailable; supply a material-specific value")
+            entry[key] = float(entry[key])
         if entry["amount"] <= 0:
             raise ValueError("amount must be positive")
         if entry["lattice_ev"] >= entry["displacement_ev"]:

@@ -70,5 +70,14 @@ class ServerRegressions(unittest.TestCase):
     def test_engine_identity_is_independent_of_loaded_result(self):
         self.app.simulation=self.populated();self.app.simulation.engine_revision=1
         with urlopen(self.url+'/api/info',timeout=5) as response:info=json.load(response)
-        self.assertEqual(info['engine_revision'],2)
+        from gsrim.simulation import ENGINE_REVISION
+        self.assertEqual(info['engine_revision'],ENGINE_REVISION)
         self.assertEqual(info['app'],'GSRIM')
+
+    def test_element_defaults_match_native_and_preserve_compound_values(self):
+        with urlopen(self.url+'/api/compounds',timeout=5) as response:data=json.load(response)
+        self.assertEqual(len(data['element_defaults']),92)
+        self.assertEqual(data['element_defaults']['W']['displacement_ev'],90)
+        self.assertIsNone(data['element_defaults']['He']['surface_ev'])
+        gaas=next(c for c in data['compounds'] if c['key']=='GaAs')
+        self.assertEqual(gaas['species'][0]['displacement_ev'],10)

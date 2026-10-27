@@ -52,6 +52,7 @@ def make_handler(app):
                 if path=="/api/compounds":
                     try:
                         from .compounds import list_elements, COMPOUNDS
+                        from .element_defaults import ELEMENT_RECORDS, binding_defaults
                         payload=[]
                         for name,c in COMPOUNDS.items():
                             payload.append({
@@ -60,7 +61,8 @@ def make_handler(app):
                                 "density_g_cm3": c["density_g_cm3"],
                                 "species": c["species"],
                             })
-                        return self.send(200,{"compounds":payload,"elements":list_elements()})
+                        return self.send(200,{"compounds":payload,"elements":list_elements(),
+                            "element_defaults":{symbol:binding_defaults(symbol) for symbol in ELEMENT_RECORDS}})
                     except ImportError:
                         return self.send(200,{"compounds":[],"elements":[]})
                 if path=="/api/token":return self.send(200,{"token":app.token})

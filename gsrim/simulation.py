@@ -12,9 +12,11 @@ from .electronic_stopping import lindhard_scharff_coefficient
 from .scatter_table import load_cached_or_build, EPS_NODES, RHO_NODES, EPS_MIN, EPS_MAX, RHO_MIN, RHO_MAX
 
 ROOT=Path(__file__).resolve().parents[1]
-ENGINE_REVISION=2
-AUTOSAVE_PATH=Path(os.environ.get("GSRIM_RESULTS_DIR",str(ROOT/"results/revision-2")))/"autosave.npz"
+ENGINE_REVISION=4
+AUTOSAVE_PATH=Path(os.environ.get("GSRIM_RESULTS_DIR",str(ROOT/"results/revision-4")))/"autosave.npz"
 CHANNELS=["implanted","electronic_ev","lattice_ev","displacements","stopped_recoils","transfer_ev"]
+DETAIL_CHANNELS=["ion_electronic_ev","recoil_electronic_ev","ion_lattice_ev",
+                 "recoil_lattice_ev","ion_transfer_ev","recoil_transfer_ev","primary_knockons"]
 LATBINS=64
 EBINS=64
 NREC=24
@@ -36,10 +38,16 @@ def _stats_from_records(records, n, project, hist, lateral, spectra, lat_max_a, 
     width=target.thickness_a/project["run"]["bins"]
     implanted_mask=records[:,0]==0
     stopped=records[implanted_mask]
+    skewness=kurtosis=None
     # SRIM-like ranges in angstrom then nm
     if len(stopped):
         rp=float(stopped[:,3].mean())
         dRp=float(stopped[:,3].std())
+        if dRp>0 and math.isfinite(dRp):
+            centered=(stopped[:,3]-rp)/dRp
+            squared=centered*centered
+            skewness=float(np.mean(squared*centered))
+            kurtosis=float(np.mean(squared*squared))
         lat_proj=float(np.mean(np.sqrt(stopped[:,1]**2+stopped[:,2]**2)))
         dLat=float(np.std(np.sqrt(stopped[:,1]**2+stopped[:,2]**2)))
         radial=np.sqrt(stopped[:,1]**2+stopped[:,2]**2+stopped[:,3]**2)
@@ -107,6 +115,8 @@ def _stats_from_records(records, n, project, hist, lateral, spectra, lat_max_a, 
         "range_std_nm": float(dRp/10) if dRp is not None else None,
         "mean_range_a": rp,
         "range_straggle_a": dRp,
+        "range_skewness": skewness,
+        "range_kurtosis": kurtosis,
         "lateral_proj_a": lat_proj,
         "lateral_straggle_a": dLat,
         "radial_a": rad,
@@ -127,8 +137,9 @@ def _stats_from_records(records, n, project, hist, lateral, spectra, lat_max_a, 
 
 
 class Simulation:
-    def __init__(self, project, checkpoint=None):
+    def __init__(self, project, checkpoint=None, *, checkpoint_path=None):
         self.project,self.target=validate(project)
+        self.autosave_path=Path(checkpoint_path) if checkpoint_path is not None else AUTOSAVE_PATH
         self.lock=threading.RLock()
         self.command=threading.Event()
         self.pause_requested=False
@@ -149,7 +160,11 @@ class Simulation:
         self.spectra=np.zeros((3,EBINS))
         self.lat_max_a=200.0
         self.sputter_elements=None
-        self.species_symbols=["ion"]
+        self.species_symbols=[self.project["ion"]["symbol"]]+list(dict.fromkeys(
+            s.symbol for layer in self.target.layers for s in layer.species))
+        self.detail_hist=np.zeros((len(DETAIL_CHANNELS)+2*(len(self.species_symbols)-1),
+                                   self.project["run"]["bins"]))
+        self.detail_complete=True
         self.use_se_table=0
         self.use_table=1
         self.device_se_E=None
@@ -183,6 +198,9 @@ class Simulation:
             if "spectra" in checkpoint: self.spectra=checkpoint["spectra"].copy()
             if "lat_max_a" in checkpoint: self.lat_max_a=float(checkpoint["lat_max_a"])
             if "sputter_elements" in checkpoint: self.sputter_elements=checkpoint["sputter_elements"].copy()
+            if "detail_hist" in checkpoint:
+                self.detail_hist=checkpoint["detail_hist"].copy()
+            self.detail_complete=bool(checkpoint.get("detail_complete",self.completed==0))
 
     def prepare(self):
         cp=backend("gpu")
@@ -215,7 +233,7 @@ class Simulation:
                     if frac<=0: continue
                     acc+=lindhard_scharff_coefficient(int(z),int(zt),m,densities[l]*frac)
                 ls[s,l]=acc
-        nodes,weights=np.polynomial.legendre.leggauss(32)
+        nodes,weights=np.polynomial.legendre.leggauss(64)
         use_table=int(self.project["physics"].get("scattering","table")=="table")
         stop_model=str(self.project["physics"].get("stopping","iaea")).lower()
         if stop_model in ("blend","bethe"):
@@ -253,9 +271,6 @@ class Simulation:
                 se_grid[s,l]=se
                 tau_grid[s,l]=build_tau(e_se, se)
                 se_sources.append(f"{sym}/L{l+1}:{src}")
-        # Always keep LS matrix as kernel fallback when se table off
-        tab=load_cached_or_build(eps_nodes=EPS_NODES,rho_nodes=RHO_NODES,
-                                  eps_range=(EPS_MIN,EPS_MAX),rho_range=(RHO_MIN,RHO_MAX),quad_order=40)
         self.lat_max_a=float(max(50.0,0.5*self.target.thickness_a))
         self.device_arrays=[cp.asarray(v,dtype=cp.float64) for v in
             (species,bounds,fractions,densities,ls,(nodes+1)/2,weights/2)]
@@ -274,7 +289,10 @@ class Simulation:
         if self.sputter_elements is None or len(self.sputter_elements)!=ns:
             self.sputter_elements=np.zeros(ns)
         self.device_sputter_elements=cp.asarray(self.sputter_elements)
+        self.device_detail_hist=cp.asarray(self.detail_hist)
         if use_table:
+            tab=load_cached_or_build(eps_nodes=EPS_NODES,rho_nodes=RHO_NODES,
+                                     eps_range=(EPS_MIN,EPS_MAX),rho_range=(RHO_MIN,RHO_MAX),quad_order=40)
             self.device_stab=cp.asarray(tab["theta"])
             self.device_slog_eps=cp.asarray(tab["log_eps"])
             self.device_slog_rho=cp.asarray(tab["log_rho"])
@@ -329,7 +347,7 @@ class Simulation:
                     with self.lock:self.status="cancelled" if self.cancel_requested else "paused"
                     break
                 count=min(run["batch_size"],run["ions"]-self.completed)
-                record=cp.zeros((count,NREC));hist=cp.zeros_like(cp.asarray(self.hist))
+                record=cp.zeros((count,NREC));hist=cp.zeros(self.hist.shape,dtype=cp.float64)
                 args=(np.int32(count),np.int32(self.completed),np.uint64(run["seed"]),
                       np.int32(self.ns),np.int32(self.nl),np.int32(run["bins"]),np.int32(run["max_events"]),
                       np.float64(ion["energy_kev"]*1000),np.float64(math.radians(ion["angle_deg"])),
@@ -342,7 +360,7 @@ class Simulation:
                       self.device_se_E,self.device_se_G,self.device_tau_G,np.int32(self.nse),
                       record,hist,self.device_tracks,self.device_trackcounts,
                       self.device_lateral,self.device_spectra,np.int32(LATBINS),np.int32(EBINS),
-                      self.device_sputter_elements)
+                      self.device_sputter_elements,self.device_detail_hist)
                 tick=time.monotonic()
                 begin=cp.cuda.Event();finish=cp.cuda.Event()
                 begin.record()
@@ -359,6 +377,7 @@ class Simulation:
                     self.tracks=self.device_tracks.get();self.trackcounts=self.device_trackcounts.get()
                     self.lateral=self.device_lateral.get();self.spectra=self.device_spectra.get()
                     self.sputter_elements=self.device_sputter_elements.get()
+                    self.detail_hist=self.device_detail_hist.get()
                     self.elapsed=base_elapsed+time.monotonic()-started
                 if not np.all(np.isfinite(cpu_record)):
                     raise RuntimeError("Non-finite state in a history; results are not valid")
@@ -369,16 +388,16 @@ class Simulation:
                 if duration>3 and run["batch_size"]>1:
                     run["batch_size"]=max(1,run["batch_size"]//2)
                 if self.completed%(max(1,run["batch_size"])*10)==0:
-                    self.save_checkpoint(AUTOSAVE_PATH)
+                    self.save_checkpoint(self.autosave_path)
             with self.lock:
                 if self.completed==run["ions"] and self.status=="running":
                     records=np.concatenate(self.records) if self.records else np.zeros((0,NREC))
                     nfail=int(np.sum(records[:,16]>0)) if len(records) else 0
                     if nfail:
                         self.status="error"
-                        self.error=(f"{nfail}/{self.completed} histories hit event/stack limits. "
-                                    f"Distributions include incomplete contributions and are diagnostic only — raise "
-                                    f"max_events, lower energy, or use mode=ions before treating as final.")
+                        self.error=(f"{nfail}/{self.completed} histories hit a transport limit or invalid numerical state. "
+                                    f"Distributions include incomplete contributions and are diagnostic only — "
+                                    f"inspect numerical inputs and event/stack limits before treating as final.")
                     else:
                         self.status="completed"
         except Exception as exc:
@@ -386,7 +405,7 @@ class Simulation:
                 self.status="error";self.error=f"{type(exc).__name__}: {exc}"
         finally:
             with self.lock:self.elapsed=base_elapsed+time.monotonic()-started
-            try:self.save_checkpoint(AUTOSAVE_PATH)
+            try:self.save_checkpoint(self.autosave_path)
             except Exception as exc:
                 with self.lock:self.error += f"; checkpoint failed: {exc}"
 
@@ -399,6 +418,7 @@ class Simulation:
             diagnostic_only=(self.engine_revision!=ENGINE_REVISION or stats["failed_histories"]>0 or self.status=="error")
             if diagnostic_only:
                 for key in ("peak_per_cm","peak_depth_nm","mean_range_nm","range_std_nm","mean_range_se_nm",
+                            "mean_range_a","range_straggle_a","range_skewness","range_kurtosis",
                             "displacements_per_ion","vacancies_per_ion","sputter_yield_front"):
                     stats[key]=None
             width=self.target.thickness_a/self.project["run"]["bins"]
@@ -424,6 +444,7 @@ class Simulation:
                 "depth_nm":((np.arange(len(normalized))+.5)*width/10).tolist(),
                 "depth_a":((np.arange(len(normalized))+.5)*width).tolist(),
                 "profiles":dict(zip(CHANNELS,(self.hist/den).tolist())),
+                "detail_profiles":self._detail_profiles(den),
                 "implant_per_cm":normalized.tolist(),
                 "lateral_nm":lat_centers.tolist(),
                 "lateral_per_ion":(self.lateral/den).tolist(),
@@ -435,6 +456,15 @@ class Simulation:
                     "sputtered":(self.spectra[2]/den).tolist(),
                 },
                 "tracks":[self.tracks[i,:self.trackcounts[i]].tolist() for i in range(NTRACE) if self.trackcounts[i]>0]}
+
+    def _detail_profiles(self,den):
+        """Never synthesize ion/recoil splits for older aggregate checkpoints."""
+        if not self.detail_complete:
+            return {}
+        nt=(self.detail_hist.shape[0]-len(DETAIL_CHANNELS))//2
+        names=DETAIL_CHANNELS+["stopped_"+s for s in self.species_symbols[1:1+nt]]+[
+            "displaced_"+s for s in self.species_symbols[1:1+nt]]
+        return dict(zip(names,(self.detail_hist/den).tolist()))
 
     def timings(self):
         with self.lock:
@@ -469,6 +499,8 @@ class Simulation:
                 tracks=self.tracks.copy(),trackcounts=self.trackcounts.copy(),
                 lateral=self.lateral.copy(),spectra=self.spectra.copy(),
                 lat_max_a=np.array(self.lat_max_a),sputter_elements=se.copy())
+            data["detail_hist"]=self.detail_hist.copy()
+            data["detail_complete"]=np.array(self.detail_complete)
         temporary=path.with_suffix(".tmp.npz")
         np.savez_compressed(temporary,**data)
         temporary.replace(path)
@@ -485,6 +517,13 @@ class Simulation:
                 if key in data:state[key]=json.loads(str(data[key]))
             for key in ("lateral","spectra","sputter_elements"):
                 if key in data: state[key]=data[key]
+            if "detail_hist" in data:
+                nt=len({s["z"] for layer in project["layers"] for s in layer["species"]})
+                detail=data["detail_hist"]
+                if detail.shape!=(len(DETAIL_CHANNELS)+2*nt,project["run"]["bins"]) or not np.isfinite(detail).all():
+                    raise ValueError("Invalid checkpoint detailed profiles")
+                state["detail_hist"]=detail
+                state["detail_complete"]=bool(data["detail_complete"]) if "detail_complete" in data else False
             if "lat_max_a" in data: state["lat_max_a"]=float(data["lat_max_a"])
             state["completed"]=int(data["completed"]);state["elapsed"]=float(data["elapsed"])
             rec_cols=state["records"].shape[1] if state["records"].ndim==2 else 0

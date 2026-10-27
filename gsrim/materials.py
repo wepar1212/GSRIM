@@ -1,6 +1,7 @@
 """Validated immutable material definitions. Depths A, energies eV, density g/cm3."""
 from dataclasses import dataclass
 import math
+from .element_defaults import ELEMENT_RECORDS
 
 
 def positive(value, name, allow_zero=False):
@@ -20,6 +21,9 @@ class Species:
     def __post_init__(self):
         if not self.symbol or type(self.z) is not int or not 1 <= self.z <= 118:
             raise ValueError("Species requires a label and integer atomic number 1..118")
+        record=ELEMENT_RECORDS.get(self.symbol)
+        if record is None or record['z']!=self.z:
+            raise ValueError('Element symbol and atomic number must match the supported H..U table')
         positive(self.mass_u, "mass")
         positive(self.displacement_ev, "displacement energy")
         positive(self.lattice_ev, "lattice energy", True)
@@ -42,6 +46,8 @@ class Layer:
             raise ValueError("Repeated atomic numbers are not supported within a layer")
         for amount in self.stoichiometry:
             positive(amount,"stoichiometric amount")
+        positive(sum(self.stoichiometry),'total stoichiometry')
+        positive(self.number_density_a3,'computed atomic density')
 
     @property
     def fractions(self):
@@ -61,6 +67,12 @@ class Target:
     def __post_init__(self):
         if not self.layers:
             raise ValueError("Target must have at least one layer")
+        right=0.
+        for layer in self.layers:
+            next_right=right+layer.thickness_a
+            if not math.isfinite(next_right) or next_right<=right:
+                raise ValueError('Layer boundaries must be finite and distinct at floating-point precision')
+            right=next_right
 
     @property
     def thickness_a(self):

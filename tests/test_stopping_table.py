@@ -92,14 +92,19 @@ class TableTransportTests(unittest.TestCase):
     def test_quadrature_mode_still_available(self):
         from gsrim.project import DEFAULT
         from gsrim.simulation import Simulation
+        from unittest.mock import patch
         import copy
         p = copy.deepcopy(DEFAULT)
         p['run']['ions'] = 8
         p['run']['batch_size'] = 8
         p['physics']['scattering'] = 'quadrature'
         s = Simulation(p)
-        s.start(); s.thread.join(90)
+        # Direct quadrature must work even when no scattering table is available.
+        with patch('gsrim.simulation.load_cached_or_build', side_effect=OSError('Table cache unavailable')):
+            s.start(); s.thread.join(90)
+        self.assertFalse(s.thread.is_alive())
         self.assertEqual(s.status, 'completed', s.error)
+        self.assertLess(s.snapshot()['stats']['max_energy_error_ev'], 1e-5)
 
 
 if __name__ == '__main__':

@@ -5,7 +5,16 @@ results/
 dist/
 build/*/
 .workbuddy/
+.mimocode-project-id
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
 research/
+历史归档_*/
+# Machine-specific workspace navigation and launcher are local conveniences.
+/工作空间导览.md
+/GSRIM-Standalone.cmd
 .env
 .env.*
 *.pem

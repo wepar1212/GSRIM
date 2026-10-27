@@ -11,21 +11,35 @@ extern "C" __global__ void binary_scatter(
     int i = blockDim.x*blockIdx.x + threadIdx.x;
     if (i >= count) return;
     double e = energy[i], b = impact[i], ec = e*m2/(m1+m2);
-    double c = k/ec, low = 0., high = .5*(c+sqrt(c*c+4*b*b));
+    double c = k/ec*(screened ? screening(0.) : 1.), low = 0., high = .5*(c+sqrt(c*c+4*b*b));
     for (int j=0; j<64; ++j) {
         double r = .5*(low+high);
         double v = k/r*(screened ? screening(r/a) : 1.);
         if (1.-(b/r)*(b/r)-v/ec > 0.) high=r; else low=r;
     }
     double r0 = .5*(low+high), integral=0.;
+    if(!isfinite(r0)||r0<=0.) {
+        angles[i]=nan("");recoils[i]=nan("");roots[i]=r0;return;
+    }
+    if(b==0.) {
+        angles[i]=3.14159265358979323846;
+        recoils[i]=e*4.*m1*m2/((m1+m2)*(m1+m2));roots[i]=r0;return;
+    }
     for (int j=0; j<order; ++j) {
         double t=nodes[j], u=1.-t*t, r=r0/u;
         double v=k/r*(screened ? screening(r/a) : 1.);
         double f=1.-(b*u/r0)*(b*u/r0)-v/ec;
+        if(!isfinite(f)||f < -1e-12) {
+            angles[i]=nan("");recoils[i]=nan("");roots[i]=r0;return;
+        }
         integral += weights[j]*2*t/sqrt(fmax(f,1e-30));
     }
     double angle = b == 0. ? 3.14159265358979323846
                           : 3.14159265358979323846-2*b/r0*integral;
+    if(!isfinite(angle)||angle < -1e-7||angle > 3.14159265358979323846+1e-7) {
+        angles[i]=nan("");recoils[i]=nan("");roots[i]=r0;return;
+    }
+    angle=fmin(3.14159265358979323846,fmax(0.,angle));
     angles[i]=angle;
     recoils[i]=e*(4*m1*m2/((m1+m2)*(m1+m2)))*sin(angle/2)*sin(angle/2);
     roots[i]=r0;

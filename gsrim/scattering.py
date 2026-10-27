@@ -69,7 +69,9 @@ def scatter(energy_ev, impact_a, *, z1, z2, m1, m2,
         return k/r * (phi(r/a, xp) if screened else 1.0)
 
     # Coulomb turning point is a guaranteed upper bracket for screened ZBL.
-    c = k/relative_e
+    # Rounded ZBL coefficients sum to 1.00007, slightly above one.
+    # The upper bracket must dominate phi(0), including very small r/a.
+    c = k/relative_e * (float(phi(0.0)) if screened else 1.0)
     lo = xp.zeros_like(e)
     hi = 0.5*(c + xp.sqrt(c*c + 4*b*b))
     for _ in range(64):

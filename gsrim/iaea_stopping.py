@@ -4,7 +4,7 @@ Data: IAEA NDS Stopping Power Database (Montanari et al. NIMB 2024),
 bulk CSV from https://www-nds.iaea.org/stopping/download/tuples
 (v2026-01). Converted to GSRIM units: energy eV, Se eV/angstrom.
 
-IAEA CSV uses mass stopping power MeV/(mg/cm^2) and energy MeV/u.
+IAEA CSV labels each energy row (eV/keV/MeV, total or per u).
 Linear Se [eV/A] = S_m [MeV cm^2/mg] * rho [g/cm^3] * 10.
 Energy [eV] = (MeV/u) * mass_u * 1e6.
 """
@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+from .element_defaults import ELEMENT_RECORDS
 
 ROOT = Path(__file__).resolve().parents[1]
 CSV_CANDIDATES = [
@@ -36,6 +37,9 @@ ATOMIC_MASS = {
     "I": 126.9, "Xe": 131.29, "Ba": 137.33, "Hf": 178.49, "Ta": 180.95, "W": 183.84,
     "Pt": 195.08, "Au": 196.97, "Pb": 207.2, "U": 238.03,
 }
+# One reference mass per element gives all isotope experiments a common
+# velocity axis; build_series rescales that axis to the requested projectile.
+ATOMIC_MASS.update({s:r['mass_u'] for s,r in ELEMENT_RECORDS.items()})
 
 # Default densities g/cm3 for elemental linearization when table is mass stopping.
 ELEMENT_DENSITY = {
@@ -68,11 +72,26 @@ def find_iaea_csv() -> Path | None:
 def _mass_for(projectile: str, ion_isotope: str) -> float:
     try:
         m = float(ion_isotope)
-        if m > 0:
+        if math.isfinite(m) and m > 0:
             return m
     except ValueError:
         pass
-    return ATOMIC_MASS.get(projectile, 1.0)
+    mass=ATOMIC_MASS.get(projectile)
+    if mass is None:raise ValueError('No projectile mass for '+projectile)
+    return mass
+
+
+def energy_to_ev(value, unit, projectile, isotope=''):
+    """Convert to the element's reference-mass energy (same E/m, same speed)."""
+    unit=unit.strip().lower().replace(' ', '')
+    per_u=unit.endswith('/u')
+    base=unit[:-2] if per_u else unit
+    scale={'ev':1.,'kev':1e3,'mev':1e6}.get(base)
+    if scale is None:raise ValueError('Unsupported IAEA energy unit: '+unit)
+    reference=ATOMIC_MASS.get(projectile)
+    if reference is None:reference=_mass_for(projectile,isotope)
+    if per_u:return float(value)*scale*reference
+    return float(value)*scale*reference/_mass_for(projectile,isotope)
 
 
 def _density_for_target(target: str, phase: str) -> float:
@@ -118,7 +137,7 @@ def load_index(csv_path: Path | None = None) -> dict:
             if not ion or not target:
                 continue
             try:
-                e_mev_u = float(row["energy"])
+                e_ev = energy_to_ev(row['energy'],row.get('energy_unit',''),ion,row.get('ion_isotope') or '')
                 # Prefer IAEA's standardized mass stopping MeV/(mg/cm^2)
                 s_raw = row.get("stopping_power_converted") or row.get("stopping_power")
                 s_mev = float(s_raw)
@@ -127,19 +146,16 @@ def load_index(csv_path: Path | None = None) -> dict:
             unit = (row.get("stopping_unit_converted") or row.get("stopping_unit") or "").strip().lower()
             # If only original unit available and it is eV/A, use directly.
             se = None
-            if unit.startswith("ev/") or unit.startswith("ev/å") or unit.startswith("ev/a"):
+            if unit in ('ev/a','ev/å','ev/angstrom'):
                 se = s_mev
             if se is None:
+                if unit not in ('mev/(mg/cm2)','mev/(mg/cm^2)'):
+                    continue  # Unknown units must never be guessed as mass stopping.
                 # Mass stopping MeV cm^2/mg * rho[g/cm3] * 10 = eV/A
-                mass_u = _mass_for(ion, row.get("ion_isotope") or "")
                 rho = _density_for_target(target, row.get("phase") or "")
                 if rho <= 0:
                     continue
-                e_ev = e_mev_u * mass_u * 1.0e6
                 se = s_mev * rho * 10.0
-            else:
-                mass_u = _mass_for(ion, row.get("ion_isotope") or "")
-                e_ev = e_mev_u * mass_u * 1.0e6
             if not (math.isfinite(e_ev) and math.isfinite(se) and e_ev > 0 and se > 0):
                 continue
             raw.setdefault((ion, target), []).append(
@@ -177,27 +193,28 @@ def load_index(csv_path: Path | None = None) -> dict:
     return index
 
 
-def build_series(index: dict, projectile: str, target: str, density_g_cm3: float | None = None) -> StoppingSeries | None:
+def build_series(index: dict, projectile: str, target: str, density_g_cm3: float | None = None,
+                 *, projectile_mass_u=None) -> StoppingSeries | None:
     """Fetch IAEA series; optionally rescale mass→linear if caller density differs."""
     series = index.get((projectile, target))
     if series is None:
         return None
-    if density_g_cm3 is None:
-        return series
     rho0 = _density_for_target(target, "")
-    if rho0 <= 0 or abs(rho0 - density_g_cm3) < 1e-9:
+    scale=1. if density_g_cm3 is None or rho0<=0 else density_g_cm3/rho0
+    reference=ATOMIC_MASS.get(projectile)
+    mass_scale=1. if projectile_mass_u is None else projectile_mass_u/reference
+    if scale==1. and mass_scale==1.:
         return series
-    scale = density_g_cm3 / rho0
     return StoppingSeries(
         projectile=projectile, target=target,
-        energy_ev=series.energy_ev.copy(),
+        energy_ev=series.energy_ev * mass_scale,
         se_ev_a=series.se_ev_a * scale,
         n_points=series.n_points, sources=series.sources,
     )
 
 
 def bragg_compound(index: dict, projectile: str, species_fractions: list[tuple[str, float]],
-                   densities: list[float], *, number_density_a3: float) -> StoppingSeries | None:
+                   densities: list[float], *, number_density_a3: float, projectile_mass_u=None) -> StoppingSeries | None:
     """Bragg rule: Se_compound = n_compound * sum f_i * (Se_pure_i / n_pure_i).
 
     species_fractions: list of (element_symbol, atomic_fraction)
@@ -215,7 +232,7 @@ def bragg_compound(index: dict, projectile: str, species_fractions: list[tuple[s
     for (sym, frac), _rho in zip(species_fractions, densities):
         if frac <= 0:
             continue
-        ser = index.get((projectile, sym))
+        ser = build_series(index,projectile,sym,projectile_mass_u=projectile_mass_u)
         if ser is None:
             return None
         mass = ATOMIC_MASS.get(sym)

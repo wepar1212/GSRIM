@@ -12,11 +12,10 @@ try {
     & $py -m PyInstaller --noconfirm --distpath $out --workpath $work (Join-Path $root 'GSRIM.spec')
     if ($LASTEXITCODE -ne 0) { throw 'PyInstaller failed.' }
     $package = Join-Path $out 'GSRIM'
-    foreach ($name in @('LICENSE', 'THIRD_PARTY_NOTICES.md', 'README.md')) {
-        Copy-Item -LiteralPath (Join-Path $root $name) -Destination $package
-    }
-    Write-Host "Experimental local build: $package"
-    Write-Host 'No external stopping datasets included. Binary redistribution has not been audited.'
+    & $py (Join-Path $PSScriptRoot 'finish_portable.py') $package
+    if ($LASTEXITCODE -ne 0) { throw 'Packaging documentation failed.' }
+    Write-Host "Local build: $package"
+    Write-Host 'Run GPU-Self-Test.cmd on the target machine before research use.'
 } finally {
     Pop-Location
 }

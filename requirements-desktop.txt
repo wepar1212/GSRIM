@@ -1,2 +1,2 @@
 -r requirements-gpu.txt
-pywebview>=5,<7
+PySide6-Essentials==6.12.0

@@ -27,12 +27,9 @@ M_ELECTRON_C2_EV = 510998.95
 V_BOHR_M_S = 2.18769126364e6
 AVOGADRO = 6.02214076e23
 
-# 8*pi*e^2*a0 * sqrt(2*e/mp) / v_bohr  converts Z^{7/6} form into eV^{1/2}/A
-# per unit number density when divided by sqrt(projectile mass in u).
-_LS_FRONT = (
-    8.0 * math.pi * COULOMB_EV_ANGSTROM * BOHR_ANGSTROM
-    * math.sqrt(2.0 * E_CHARGE_C / M_PROTON_KG) / V_BOHR_M_S
-)  # ≈ 1.2100
+# Published practical LS coefficient, with E in eV and projectile mass in u.
+# This is the conventional 1.212 eV^(1/2) A^2 parameterization, not a new fit.
+_LS_FRONT = 1.212
 
 # Published mean excitation energies I (eV), commonly used compilations
 # (e.g. ICRU 49 / Berger-Seltzer style values). Extend as needed.
@@ -79,7 +76,7 @@ def bethe_stopping(z1, mass_u, energy_ev, number_density_a3, z2_mean, i_mean_ev,
     if np.any(~np.isfinite(e)) or np.any(e <= 0):
         raise ValueError("energy must be positive and finite")
     # beta^2 = 2E/(m c^2) for non-rel projectile of mass mass_u * mp
-    m_c2 = mass_u * M_PROTON_KG * (2.99792458e8) ** 2 / E_CHARGE_C  # eV
+    m_c2 = mass_u * 931.49410242e6  # atomic mass unit, not proton mass
     beta2 = np.clip(2.0 * e / m_c2, 1e-30, 0.7)
     # K = 4 pi e^4 me c^2 in practical units:
     # Se = n * 2*pi*e^4 * Z2 / (me v^2) * [ln(2 me v^2/I) - ...]
@@ -91,7 +88,7 @@ def bethe_stopping(z1, mass_u, energy_ev, number_density_a3, z2_mean, i_mean_ev,
     # 4 pi e^4 n Z2 / (me v^2) in eV/A:
     # e^4 = (e^2)^2 ; n in 1/A^3 ; me v^2 = me_c2 * beta2
     prefactor = (
-        4.0 * math.pi * (COULOMB_EV_ANGSTROM ** 2) * number_density_a3 * z2_mean
+        4.0 * math.pi * (COULOMB_EV_ANGSTROM ** 2) * number_density_a3 * z2_mean * z1**2
         / (me_c2 * v2_over_c2)
     )
     argument = np.maximum(2.0 * me_c2 * v2_over_c2 / i_mean_ev, 1e-300)
@@ -100,18 +97,21 @@ def bethe_stopping(z1, mass_u, energy_ev, number_density_a3, z2_mean, i_mean_ev,
 
 
 def mean_excitation_energy(species_z, fractions):
-    """Bragg-rule geometric mean of element I values for a compound."""
+    """Bragg-rule geometric mean weighted by electron fractions f_i Z_i."""
     if len(species_z) != len(fractions) or not species_z:
         raise ValueError("species and fractions must match")
-    total = float(sum(fractions))
+    if any(not math.isfinite(f) or f<0 for f in fractions):
+        raise ValueError('Fractions must be finite and nonnegative')
+    total = float(sum(z*f for z,f in zip(species_z,fractions)))
     if total <= 0:
         raise ValueError("fractions must sum positive")
     log_i = 0.0
     for z, f in zip(species_z, fractions):
         validate_z(z)
+        if f==0:continue
         if z not in MEAN_EXCITATION_EV:
             raise ValueError(f"No published mean excitation energy for Z={z}; add a value with citation")
-        log_i += (f / total) * math.log(MEAN_EXCITATION_EV[z])
+        log_i += (z*f / total) * math.log(MEAN_EXCITATION_EV[z])
     return math.exp(log_i)
 
 

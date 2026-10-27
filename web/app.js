@@ -37,21 +37,8 @@ const ELEMENTS = {
   Ts:[117,294,"Tennessine 鿬"],Og:[118,294,"Oganesson 鿫"]
 };
 
-/* typical displacement / lattice / surface binding defaults */
-const BIND_DEFAULTS = {
-  H:[10,2,1],He:[10,2,1],Li:[25,3,1.7],Be:[25,3,3.4],B:[28,3,5.8],C:[28,3,7.4],N:[28,3,2],O:[28,3,2],
-  F:[17,3,1.8],Ne:[15,3,1.2],Na:[25,2.5,1.1],Mg:[25,3,1.5],Al:[25,3,3.4],Si:[25,3,4.7],P:[25,3,2],
-  S:[25,3,2.9],Cl:[25,3,2],Ar:[15,3,0.8],K:[25,2.5,0.9],Ca:[25,3,1.8],Sc:[25,3,3.3],Ti:[25,3,4.9],
-  V:[25,3,5.3],Cr:[25,3,4.1],Mn:[25,3,2.9],Fe:[25,3,4.3],Co:[25,3,4.4],Ni:[25,3,4.4],Cu:[25,3,3.5],
-  Zn:[25,3,1.4],Ga:[25,3,2.8],Ge:[25,3,3.9],As:[25,3,2.8],Se:[25,3,2.1],Br:[25,3,1.2],Kr:[15,3,0.6],
-  Rb:[25,2.5,0.8],Sr:[25,3,1.7],Y:[25,3,4.3],Zr:[25,3,6.3],Nb:[25,3,7.6],Mo:[25,3,6.8],Tc:[25,3,7],
-  Ru:[25,3,6.7],Rh:[25,3,5.8],Pd:[25,3,3.9],Ag:[25,3,2.9],Cd:[25,3,1.2],In:[25,3,2.5],Sn:[25,3,3.1],
-  Sb:[25,3,2.8],Te:[25,3,2.2],I:[25,3,1.2],Xe:[15,3,0.6],Cs:[25,2.5,0.8],Ba:[25,3,1.9],La:[25,3,4.4],
-  Ce:[25,3,4.3],Pr:[25,3,3.6],Nd:[25,3,3.4],Pm:[25,3,3.3],Sm:[25,3,2.1],Eu:[25,3,1.5],Gd:[25,3,4.1],
-  Tb:[25,3,4.1],Dy:[25,3,3.1],Ho:[25,3,3.1],Er:[25,3,3.1],Tm:[25,3,2.4],Yb:[25,3,1.6],Lu:[25,3,4.4],
-  Hf:[25,3,6.4],Ta:[25,3,8.1],W:[25,3,8.9],Re:[25,3,8.1],Os:[25,3,8.2],Ir:[25,3,6.9],Pt:[25,3,5.8],
-  Au:[25,3,3.8],Hg:[25,3,0.7],Tl:[25,3,1.9],Pb:[25,3,2],Bi:[25,3,2.2],Th:[25,3,6.2],U:[25,3,5.4]
-};
+/* Shared audited defaults arrive from the local Python API; no fabricated fallback. */
+let BIND_DEFAULTS = Object.create(null);
 
 function lookupElement(sym) {
   if (!sym) return null;
@@ -64,9 +51,12 @@ function lookupElement(sym) {
 
 function bindDefaults(sym) {
   const el = lookupElement(sym);
-  if (!el) return { displacement_ev: 25, lattice_ev: 3, surface_ev: 2 };
-  const b = BIND_DEFAULTS[el.symbol] || [25, 3, 2];
-  return { displacement_ev: b[0], lattice_ev: b[1], surface_ev: b[2] };
+  const values = el ? BIND_DEFAULTS[el.symbol] : null;
+  return {
+    displacement_ev: values?.displacement_ev ?? null,
+    lattice_ev: values?.lattice_ev ?? null,
+    surface_ev: values?.surface_ev ?? null
+  };
 }
 
 function makeSpecies(sym, amount) {
@@ -329,7 +319,7 @@ function renderSpecies() {
       inp.step = "any";
       inp.value = val == null ? "" : val;
       inp.addEventListener("change", () => {
-        s[key] = Number(inp.value);
+        s[key] = inp.value.trim() === "" ? null : Number(inp.value);
         dirty = true;
         renderTargetSummary();
       });
@@ -485,9 +475,9 @@ function collect() {
       z: Number(s.z),
       mass_u: Number(s.mass_u),
       amount: Number(s.amount),
-      displacement_ev: Number(s.displacement_ev),
-      lattice_ev: Number(s.lattice_ev),
-      surface_ev: Number(s.surface_ev)
+      displacement_ev: s.displacement_ev == null ? null : Number(s.displacement_ev),
+      lattice_ev: s.lattice_ev == null ? null : Number(s.lattice_ev),
+      surface_ev: s.surface_ev == null ? null : Number(s.surface_ev)
     }))
   }));
   return p;
@@ -988,17 +978,20 @@ function drawTrimPlot() {
   if (plotMode === "implant" || plotMode === "lateral") {
     const mo = momentsFromProfile(points.map(p => p[0]), points.map(p => p[1]));
     const st = state.stats || {};
-    const Rp = plotMode === "implant" ? (st.mean_range_a != null ? st.mean_range_a : mo?.mean)
-                                      : (mo ? mo.mean : null);
-    const dRp = plotMode === "implant" ? (st.range_straggle_a != null ? st.range_straggle_a : mo?.sd)
-                                        : (mo ? mo.sd : null);
+    const incident = plotMode === "implant";
+    const valid = !state.diagnostic_only;
+    const Rp = incident ? (valid ? st.mean_range_a : null) : mo?.mean;
+    const dRp = incident ? (valid ? st.range_straggle_a : null) : mo?.sd;
+    const skew = incident ? (valid ? st.range_skewness : null) : mo?.skew;
+    const kurt = incident ? (valid ? st.range_kurtosis : null) : mo?.kurt;
+    const shapeText = value => value != null && Number.isFinite(value) ? value.toFixed(4) : "N/A";
     leftLines = [
       `Range     =  ${fmtTrim(Rp)} A`,
       `Straggle  =  ${fmtTrim(dRp)} A`
     ];
     rightLines = [
-      `Skewness  =  ${(mo ? mo.skew : 0).toFixed(4)}`,
-      `Kurtosis  =  ${(mo ? mo.kurt : 3).toFixed(4)}`
+      `Skewness  =  ${shapeText(skew)}`,
+      `Kurtosis  =  ${shapeText(kurt)}`
     ];
     const scale = ymax > 1e5 ? 1e5 : ymax > 1e4 ? 1e4 : ymax > 1e2 ? 1e2 : 1;
     yunitNote = (yv) => {
@@ -1185,14 +1178,17 @@ function initCompounds() {
     list.forEach(c => {
       const o = document.createElement("option");
       o.value = c.key;
-      const formula = (c.species || []).map(([sym, amt]) =>
-        amt === 1 ? sym : `${sym}${amt}`).join("");
+      const formula = (c.species || []).map(entry => {
+        const [sym, amt] = Array.isArray(entry) ? entry : [entry.symbol, entry.amount];
+        return amt === 1 ? sym : `${sym}${amt}`;
+      }).join("");
       o.textContent = `${formula || c.key} — ${c.name}` + (c.density ? ` (${c.density} g/cm³)` : "");
       sel.append(o);
     });
   };
   apply(COMPOUNDS);
   api("compounds").then(res => {
+    if (res.element_defaults) BIND_DEFAULTS = res.element_defaults;
     const raw = Array.isArray(res) ? res : (res.compounds || []);
     if (!Array.isArray(raw) || !raw.length) return;
     // Accept either full objects or names; never replace the embedded dict with junk.
@@ -1202,8 +1198,8 @@ function initCompounds() {
         return hit || null;
       }
       const species = (c.species || c.elements || []).map(s =>
-        Array.isArray(s) ? s : [s.symbol, s.amount ?? 1]
-      ).filter(p => p && p[0]);
+        Array.isArray(s) ? s : {...s}
+      ).filter(s => s && (Array.isArray(s) ? s[0] : s.symbol));
       if (!species.length) return null;
       return {
         key: c.key || c.name,
@@ -1367,7 +1363,7 @@ function bindEvents() {
   try {
     let info;
     try {info=await api('info');} catch {throw Error('当前后台是旧版引擎。请重新运行 Start-GSRIM.cmd 打开新版，不要在此页继续计算。');}
-    if(info.engine_revision!==2)throw Error('前后端版本不匹配，请重新启动 GSRIM。');
+    if(info.engine_revision!==4)throw Error('前后端版本不匹配，请重新启动 GSRIM。');
     if($('checkpoint-path'))$('checkpoint-path').textContent='本服务断点：'+info.checkpoint_path+'。旧版结果只读。';
     token = (await api("token")).token;
     state = await api("state");

@@ -78,7 +78,7 @@ def mass_stopping_to_linear(s_mass, density_g_cm3):
     return s_mass * density_g_cm3 * 0.01
 
 
-def get_se_series(projectile: str, target_name: str, density_g_cm3: float, index=None):
+def get_se_series(projectile: str, target_name: str, density_g_cm3: float, index=None, *, projectile_mass_u=None):
     """Return (E_eV, Se_eV_A) or None."""
     if index is None:
         index = load_nist_index()
@@ -88,5 +88,9 @@ def get_se_series(projectile: str, target_name: str, density_g_cm3: float, index
         # try alias
         return None
     e, sm = index[key]
+    if projectile_mass_u is not None:
+        # STAR curves refer to protons and alpha particles, respectively.
+        reference={'H':1.007276466621,'He':4.001506179127}[projectile]
+        e=e*(projectile_mass_u/reference)
     se = mass_stopping_to_linear(sm, density_g_cm3)
     return e, se
